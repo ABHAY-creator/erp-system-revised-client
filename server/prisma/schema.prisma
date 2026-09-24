@@ -1,0 +1,169 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// USER MANAGEMENT & RBAC
+// -------------------------------------------------------------
+model User {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  email        String    @unique
+  passwordHash String
+  name         String
+  phone        String?
+  role         String    @default("SALESPERSON") // SALESPERSON, SALES_MANAGER, HOD
+  status       String    @default("Active")      // Active, Inactive
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  createdQuotations Quotation[]
+  createdOrders     SalesOrder[]
+  auditLogs         AuditLog[]
+}
+
+// -------------------------------------------------------------
+// PRODUCT MASTER (CATALOGUE ONLY - NO INVENTORY / STOCK)
+// -------------------------------------------------------------
+model Product {
+  id             String    @id @default(cuid())
+  productId      String    @unique // PROD-00001
+  name           String
+  image          String?
+  description    String?
+  productType    String    @default("Single") // Single, Pair, Box, Bundle, Custom
+  unit           String    @default("PCS")    // PCS, PAIR, BOX, BUNDLE, MTR, KG, SET
+  pairQuantity   Int       @default(2)
+  boxQuantity    Int       @default(10)
+  bundleQuantity Int       @default(50)
+  sellingPrice   Float
+  status         String    @default("Active") // Active, Inactive
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  quotationItems QuotationItem[]
+  salesOrderItems SalesOrderItem[]
+}
+
+// -------------------------------------------------------------
+// CUSTOMER MASTER
+// -------------------------------------------------------------
+model Customer {
+  id         String    @id @default(cuid())
+  customerId String    @unique // CUS-00001
+  name       String
+  email      String?
+  phone      String?
+  address    String
+  notes      String?
+  status     String    @default("Active") // Active, Inactive
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  quotations Quotation[]
+  salesOrders SalesOrder[]
+}
+
+// -------------------------------------------------------------
+// QUOTATIONS
+// -------------------------------------------------------------
+model Quotation {
+  id              String          @id @default(cuid())
+  quoteId         String          @unique // QUO-00001
+  customerId      String
+  customer        Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  quoteDate       DateTime        @default(now())
+  validUntil      DateTime
+  status          String          @default("Pending") // Pending, Confirmed, Rejected
+  subtotal        Float           @default(0.0)
+  discountPercent Float           @default(0.0)
+  discountAmount  Float           @default(0.0)
+  taxPercent      Float           @default(18.0)
+  taxAmount       Float           @default(0.0)
+  grandTotal      Float           @default(0.0)
+  notes           String?
+  createdById     String
+  createdBy       User            @relation(fields: [createdById], references: [id])
+  salesOrderId    String?         // Linked SO ID once confirmed
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  items           QuotationItem[]
+  salesOrder      SalesOrder?
+}
+
+model QuotationItem {
+  id          String    @id @default(cuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  description String?
+  unit        String
+  quantity    Float
+  unitPrice   Float
+  totalPrice  Float     // quantity * unitPrice
+}
+
+// -------------------------------------------------------------
+// SALES ORDERS (ONLY CONFIRMED QUOTATIONS BECOME ORDERS)
+// -------------------------------------------------------------
+model SalesOrder {
+  id             String           @id @default(cuid())
+  soId           String           @unique // SO-00001
+  quotationId    String           @unique
+  quotation      Quotation        @relation(fields: [quotationId], references: [id])
+  customerId     String
+  customer       Customer         @relation(fields: [customerId], references: [id])
+  orderDate      DateTime         @default(now())
+  orderStatus    String           @default("Confirmed") // Confirmed, Processing, Shipment Sent, Delivered, Cancelled
+  shipmentStatus String           @default("Pending")   // Pending, In Transit, Delivered
+  deliveryStatus String           @default("Pending")   // Pending, Out for Delivery, Delivered
+  shipmentId     String?          // SHP-00001
+  subtotal       Float            @default(0.0)
+  discountAmount Float            @default(0.0)
+  taxAmount      Float            @default(0.0)
+  totalAmount    Float            @default(0.0)
+  notes          String?
+  createdById    String
+  createdBy      User             @relation(fields: [createdById], references: [id])
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  items          SalesOrderItem[]
+}
+
+model SalesOrderItem {
+  id           String     @id @default(cuid())
+  salesOrderId String
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id])
+  description  String?
+  unit         String
+  quantity     Float
+  unitPrice    Float
+  totalPrice   Float
+}
+
+// -------------------------------------------------------------
+// AUDIT LOG
+// -------------------------------------------------------------
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userName  String
+  userRole  String
+  action    String   // Created Quotation, Confirmed Quotation, Rejected Quotation, etc.
+  module    String   // Quotation, Sales, Customer, Product, User, etc.
+  recordId  String?
+  details   String?
+  createdAt DateTime @default(now())
+}
