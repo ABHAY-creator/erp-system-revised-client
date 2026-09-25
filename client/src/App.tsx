@@ -107,7 +107,14 @@ export const App: React.FC = () => {
               }
             />
 
-            <Route path="settings" element={<SettingsPage />} />
+            <Route
+              path="settings"
+              element={
+                <RoleRoute allowedRoles={['SALES_MANAGER', 'HOD']}>
+                  <SettingsPage />
+                </RoleRoute>
+              }
+            />
           </Route>
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -14,13 +14,14 @@ import {
   User,
   X,
   Check,
+  AlertTriangle,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
 
 export const SalesPage: React.FC = () => {
-  const { isManager, isHOD } = useAuth();
+  const { user, isManager, isHOD, isSalesperson } = useAuth();
   const [searchParams] = useSearchParams();
   const initialStatus = searchParams.get('status') || 'ALL';
 
@@ -34,8 +35,14 @@ export const SalesPage: React.FC = () => {
   const [statusUpdateTarget, setStatusUpdateTarget] = useState<any>(null);
   const [newStatus, setNewStatus] = useState('Processing');
   const [statusNotes, setStatusNotes] = useState('');
+  const [statusRejectionReason, setStatusRejectionReason] = useState('');
   const [updating, setUpdating] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+
+  // Rejection Confirmation Dialog
+  const [rejectTarget, setRejectTarget] = useState<any>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [rejecting, setRejecting] = useState(false);
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -63,7 +70,8 @@ export const SalesPage: React.FC = () => {
   const openStatusUpdate = (order: any) => {
     setStatusUpdateTarget(order);
     setNewStatus(order.orderStatus);
-    setStatusNotes('');
+    setStatusNotes(order.notes || '');
+    setStatusRejectionReason(order.rejectionReason || '');
   };
 
   const handleStatusSubmit = async (e: React.FormEvent) => {
@@ -75,6 +83,7 @@ export const SalesPage: React.FC = () => {
       const res = await api.patch(`/sales/${statusUpdateTarget.id}/status`, {
         orderStatus: newStatus,
         notes: statusNotes,
+        rejectionReason: newStatus === 'Rejected' ? statusRejectionReason : undefined,
       });
 
       setStatusUpdateTarget(null);
@@ -85,6 +94,46 @@ export const SalesPage: React.FC = () => {
       alert(err.message || 'Failed to update status.');
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleConfirmOrder = async (order: any) => {
+    try {
+      const res = await api.patch(`/sales/${order.id}/status`, {
+        orderStatus: 'Confirmed',
+      });
+      setSuccessToast(res.message);
+      setTimeout(() => setSuccessToast(null), 4000);
+      fetchOrders();
+    } catch (err: any) {
+      alert(err.message || 'Failed to confirm order.');
+    }
+  };
+
+  const openRejectModal = (order: any) => {
+    setRejectTarget(order);
+    setRejectionReason('');
+  };
+
+  const handleRejectOrderSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectTarget) return;
+
+    setRejecting(true);
+    try {
+      const res = await api.patch(`/sales/${rejectTarget.id}/status`, {
+        orderStatus: 'Rejected',
+        rejectionReason: rejectionReason || 'Declined by salesperson',
+      });
+
+      setRejectTarget(null);
+      setSuccessToast(`Order ${rejectTarget.soId} has been rejected.`);
+      setTimeout(() => setSuccessToast(null), 4000);
+      fetchOrders();
+    } catch (err: any) {
+      alert(err.message || 'Failed to reject order.');
+    } finally {
+      setRejecting(false);
     }
   };
 
@@ -112,7 +161,7 @@ export const SalesPage: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-slate-900">Confirmed Sales Orders</h2>
           <p className="text-xs text-slate-500">
-            Orders generated from confirmed quotations. These transactions contribute to revenue analytics.
+            Orders generated from confirmed quotations. Rejected or declined orders are automatically excluded from revenue analytics.
           </p>
         </div>
       </div>
@@ -141,6 +190,7 @@ export const SalesPage: React.FC = () => {
             <option value="Processing">Processing</option>
             <option value="Shipment Sent">Shipment Sent</option>
             <option value="Delivered">Delivered</option>
+            <option value="Rejected">Rejected / Declined</option>
             <option value="Cancelled">Cancelled</option>
           </select>
         </div>
@@ -188,6 +238,11 @@ export const SalesPage: React.FC = () => {
                     <td className="px-5 py-3 text-slate-600">{o.salesperson}</td>
                     <td className="px-5 py-3">
                       <StatusBadge status={o.orderStatus} />
+                      {o.rejectionReason && (
+                        <span className="block text-[10px] text-rose-600 truncate max-w-[140px] mt-0.5" title={o.rejectionReason}>
+                          Reason: {o.rejectionReason}
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3">
                       {o.shipmentId ? (
@@ -195,11 +250,14 @@ export const SalesPage: React.FC = () => {
                           <span className="font-mono text-purple-700 font-bold block">{o.shipmentId}</span>
                           <span className="text-[10px] text-slate-400">{o.shipmentStatus}</span>
                         </div>
+                      ) : o.orderStatus === 'Rejected' ? (
+                        <span className="text-rose-400 italic">Declined</span>
                       ) : (
                         <span className="text-slate-400 italic">Not Shipped</span>
                       )}
                     </td>
-                    <td className="px-5 py-3 text-right space-x-2 whitespace-nowrap">
+                    <td className="px-5 py-3 text-right space-x-1.5 whitespace-nowrap">
+                      {/* View Button */}
                       <button
                         onClick={() => openViewOrder(o)}
                         title="View order details"
@@ -208,14 +266,48 @@ export const SalesPage: React.FC = () => {
                         <Eye className="w-4 h-4" />
                       </button>
 
+                      {/* Salesperson actions: Confirm or Reject */}
+                      {isSalesperson && o.orderStatus !== 'Rejected' && o.orderStatus !== 'Cancelled' && o.orderStatus !== 'Delivered' && (
+                        <>
+                          {o.orderStatus !== 'Confirmed' && (
+                            <button
+                              onClick={() => handleConfirmOrder(o)}
+                              title="Mark Order as Confirmed"
+                              className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold rounded text-[11px]"
+                            >
+                              Confirm
+                            </button>
+                          )}
+                          <button
+                            onClick={() => openRejectModal(o)}
+                            title="Reject / Decline Order"
+                            className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold rounded text-[11px]"
+                          >
+                            Reject
+                          </button>
+                        </>
+                      )}
+
+                      {/* Manager / HOD Status Update */}
                       {(isManager || isHOD) && (
-                        <button
-                          onClick={() => openStatusUpdate(o)}
-                          title="Update Status / Shipment"
-                          className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-700 font-semibold rounded text-[11px]"
-                        >
-                          Update Status
-                        </button>
+                        <>
+                          <button
+                            onClick={() => openStatusUpdate(o)}
+                            title="Update Status / Shipment"
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-700 font-semibold rounded text-[11px]"
+                          >
+                            Update Status
+                          </button>
+                          {o.orderStatus !== 'Rejected' && o.orderStatus !== 'Cancelled' && (
+                            <button
+                              onClick={() => openRejectModal(o)}
+                              title="Reject Order"
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                            >
+                              <XCircle className="w-4 h-4" />
+                            </button>
+                          )}
+                        </>
                       )}
                     </td>
                   </tr>
@@ -232,7 +324,7 @@ export const SalesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* UPDATE STATUS MODAL */}
+      {/* UPDATE STATUS MODAL (MANAGERS & HOD) */}
       {statusUpdateTarget && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full border border-slate-200">
@@ -257,9 +349,28 @@ export const SalesPage: React.FC = () => {
                   <option value="Processing">Processing (Packaging/Preparation)</option>
                   <option value="Shipment Sent">Shipment Sent (Assigns Shipment ID)</option>
                   <option value="Delivered">Delivered (Fulfillment Complete)</option>
+                  <option value="Rejected">Rejected / Declined (Exclude from Sales)</option>
                   <option value="Cancelled">Cancelled</option>
                 </select>
               </div>
+
+              {newStatus === 'Rejected' && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg space-y-2">
+                  <label className="block font-bold text-rose-800">
+                    Rejection Reason / Client Feedback (Optional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={statusRejectionReason}
+                    onChange={(e) => setStatusRejectionReason(e.target.value)}
+                    placeholder="Enter reason for rejecting this order..."
+                    className="w-full border border-rose-300 rounded-lg p-2 text-xs bg-white text-slate-800"
+                  />
+                  <p className="text-[11px] text-rose-600">
+                    Rejecting this order excludes it from sales revenue and dashboard statistics.
+                  </p>
+                </div>
+              )}
 
               {newStatus === 'Shipment Sent' && !statusUpdateTarget.shipmentId && (
                 <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg text-purple-800">
@@ -305,13 +416,66 @@ export const SalesPage: React.FC = () => {
         </div>
       )}
 
+      {/* SALESPERSON / GENERAL REJECT CONFIRMATION DIALOG */}
+      {rejectTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full border border-slate-200 shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <div className="text-center">
+              <h4 className="text-base font-bold text-slate-900">
+                Are you sure you want to reject this order?
+              </h4>
+              <p className="text-xs text-slate-500 mt-1">
+                Sales Order <strong className="text-slate-800">{rejectTarget.soId}</strong> for{' '}
+                <strong className="text-slate-800">{rejectTarget.customerName}</strong> (₹{rejectTarget.amount.toLocaleString('en-IN')}) will be marked as Rejected and excluded from sales revenue.
+              </p>
+            </div>
+
+            <form onSubmit={handleRejectOrderSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Rejection Reason (Optional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  placeholder="e.g. Customer cancelled requirements, procurement delayed, or pricing dispute..."
+                  className="w-full border border-slate-300 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setRejectTarget(null)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={rejecting}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-semibold shadow-sm disabled:opacity-50"
+                >
+                  {rejecting ? 'Rejecting...' : 'Yes, Reject Order'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* VIEW ORDER MODAL */}
       {viewOrder && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white rounded-t-2xl">
               <div>
-                <span className="text-xs uppercase font-bold text-blue-400">Confirmed Sales Order</span>
+                <span className="text-xs uppercase font-bold text-blue-400">Sales Order Details</span>
                 <h3 className="text-lg font-extrabold tracking-tight">{viewOrder.soId}</h3>
               </div>
               <button onClick={() => setViewOrder(null)} className="text-slate-400 hover:text-white">
@@ -320,6 +484,25 @@ export const SalesPage: React.FC = () => {
             </div>
 
             <div className="p-6 space-y-5 text-xs">
+              {/* Prominent Rejection Banner if Rejected */}
+              {viewOrder.orderStatus === 'Rejected' && (
+                <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-1">
+                  <div className="flex items-center space-x-1.5 font-bold text-rose-800 text-sm">
+                    <XCircle className="w-4 h-4 text-rose-600" />
+                    <span>Order Rejected / Declined</span>
+                  </div>
+                  <p className="text-xs text-rose-700">
+                    <strong>Reason:</strong> {viewOrder.rejectionReason || 'No rejection reason specified.'}
+                  </p>
+                  {viewOrder.rejectedByName && (
+                    <p className="text-[11px] text-rose-600 mt-1">
+                      Recorded by <strong>{viewOrder.rejectedByName}</strong> on{' '}
+                      {viewOrder.rejectedAt ? new Date(viewOrder.rejectedAt).toLocaleString('en-IN') : 'N/A'}. This order is excluded from departmental sales metrics.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-100">
                 <div>
                   <span className="text-slate-400 uppercase text-[10px] font-bold">Client Information</span>
@@ -392,7 +575,9 @@ export const SalesPage: React.FC = () => {
                   </div>
                   <div className="pt-2 border-t border-slate-200 flex justify-between font-bold text-sm text-slate-900">
                     <span>Total Amount:</span>
-                    <span className="text-blue-600">₹{viewOrder.totalAmount.toLocaleString('en-IN')}</span>
+                    <span className={viewOrder.orderStatus === 'Rejected' ? 'text-slate-400 line-through' : 'text-blue-600'}>
+                      ₹{viewOrder.totalAmount.toLocaleString('en-IN')}
+                    </span>
                   </div>
                 </div>
               </div>

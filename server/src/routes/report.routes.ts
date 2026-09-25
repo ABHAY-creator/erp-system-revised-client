@@ -59,6 +59,7 @@ router.get(
         prisma.quotation.findMany({
           where: {
             createdAt: { gte: start, lte: end },
+            isDeleted: false,
           },
           include: {
             customer: { select: { customerId: true, name: true } },

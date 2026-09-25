@@ -12,6 +12,8 @@ import reportRoutes from './routes/report.routes';
 import aiRoutes from './routes/ai.routes';
 import userRoutes from './routes/user.routes';
 import auditRoutes from './routes/audit.routes';
+import notificationRoutes from './routes/notification.routes';
+import settingsRoutes from './routes/settings.routes';
 
 dotenv.config();
 
@@ -44,6 +46,8 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

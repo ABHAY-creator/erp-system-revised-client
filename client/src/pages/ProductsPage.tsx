@@ -16,7 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
 
 export const ProductsPage: React.FC = () => {
-  const { canManageProducts, canDeleteProduct } = useAuth();
+  const { canManageProducts, canDeleteProduct, canAddProduct } = useAuth();
 
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -164,7 +164,7 @@ export const ProductsPage: React.FC = () => {
             Authoritative sales product catalogue (Independent of warehouse stock)
           </p>
         </div>
-        {canManageProducts && (
+        {(canManageProducts || canAddProduct) && (
           <button
             onClick={openCreateModal}
             className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm shadow-blue-500/20 transition-all self-start sm:self-auto"

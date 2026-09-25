@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Users,
   Plus,
@@ -13,10 +13,36 @@ import {
   MapPin,
   FileText,
   ShoppingCart,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge } from '../components/StatusBadge';
+
+interface CountryCodeOption {
+  name: string;
+  code: string;
+  flag: string;
+}
+
+const COUNTRY_CODES: CountryCodeOption[] = [
+  { name: 'India', code: '+91', flag: '🇮🇳' },
+  { name: 'United States', code: '+1', flag: '🇺🇸' },
+  { name: 'United Kingdom', code: '+44', flag: '🇬🇧' },
+  { name: 'United Arab Emirates', code: '+971', flag: '🇦🇪' },
+  { name: 'Saudi Arabia', code: '+966', flag: '🇸🇦' },
+  { name: 'Qatar', code: '+974', flag: '🇶🇦' },
+  { name: 'Kuwait', code: '+965', flag: '🇰🇼' },
+  { name: 'Oman', code: '+968', flag: '🇴🇲' },
+  { name: 'Bahrain', code: '+973', flag: '🇧🇭' },
+  { name: 'Singapore', code: '+65', flag: '🇸🇬' },
+  { name: 'Australia', code: '+61', flag: '🇦🇺' },
+  { name: 'Canada', code: '+1', flag: '🇨🇦' },
+  { name: 'Germany', code: '+49', flag: '🇩🇪' },
+  { name: 'France', code: '+33', flag: '🇫🇷' },
+  { name: 'Japan', code: '+81', flag: '🇯🇵' },
+];
 
 export const CustomersPage: React.FC = () => {
   const { user, isHOD, isManager, isSalesperson } = useAuth();
@@ -25,6 +51,7 @@ export const CustomersPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [successToast, setSuccessToast] = useState<string | null>(null);
 
   // Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -36,13 +63,30 @@ export const CustomersPage: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
+    countryCode: '+91',
     phone: '',
     address: '',
     notes: '',
     status: 'Active',
   });
+  const [countryPickerOpen, setCountryPickerOpen] = useState(false);
+  const [countrySearch, setCountrySearch] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const countryPickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (countryPickerRef.current && !countryPickerRef.current.contains(e.target as Node)) {
+        setCountryPickerOpen(false);
+      }
+    };
+    if (countryPickerOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [countryPickerOpen]);
 
   const fetchCustomers = async () => {
     setLoading(true);
@@ -73,12 +117,15 @@ export const CustomersPage: React.FC = () => {
     setFormData({
       name: '',
       email: '',
+      countryCode: '+91',
       phone: '',
       address: '',
       notes: '',
       status: 'Active',
     });
     setFormError(null);
+    setCountryPickerOpen(false);
+    setCountrySearch('');
     setIsModalOpen(true);
   };
 
@@ -88,12 +135,15 @@ export const CustomersPage: React.FC = () => {
     setFormData({
       name: c.name,
       email: c.email || '',
+      countryCode: c.countryCode || '+91',
       phone: c.phone || '',
       address: c.address,
       notes: c.notes || '',
       status: c.status,
     });
     setFormError(null);
+    setCountryPickerOpen(false);
+    setCountrySearch('');
     setIsModalOpen(true);
   };
 
@@ -118,10 +168,14 @@ export const CustomersPage: React.FC = () => {
 
     try {
       if (modalMode === 'create') {
-        await api.post('/customers', formData);
+        const { status, ...createPayload } = formData;
+        await api.post('/customers', createPayload);
+        setSuccessToast(`Customer created successfully.`);
       } else {
         await api.put(`/customers/${selectedCustomer.id}`, formData);
+        setSuccessToast(`Customer updated successfully.`);
       }
+      setTimeout(() => setSuccessToast(null), 3500);
       setIsModalOpen(false);
       fetchCustomers();
     } catch (err: any) {
@@ -131,25 +185,66 @@ export const CustomersPage: React.FC = () => {
     }
   };
 
+  const handleStatusChange = async (customerId: string, newStatus: string) => {
+    try {
+      // Optimistic update
+      setCustomers((prev) =>
+        prev.map((c) => (c.id === customerId ? { ...c, status: newStatus } : c))
+      );
+      const res = await api.patch(`/customers/${customerId}/status`, { status: newStatus });
+      setSuccessToast(res.message);
+      setTimeout(() => setSuccessToast(null), 3000);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update customer status.');
+      fetchCustomers();
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
       await api.delete(`/customers/${deleteTarget.id}`);
       setDeleteTarget(null);
+      setSuccessToast(`Customer deleted.`);
+      setTimeout(() => setSuccessToast(null), 3000);
       fetchCustomers();
     } catch (err: any) {
       alert(err.message || 'Failed to delete customer.');
     }
   };
 
+  const filteredCountries = COUNTRY_CODES.filter(
+    (c) =>
+      c.name.toLowerCase().includes(countrySearch.toLowerCase()) ||
+      c.code.includes(countrySearch)
+  );
+
+  const selectedCountry =
+    COUNTRY_CODES.find((c) => c.code === formData.countryCode) || COUNTRY_CODES[0];
+
+  const formatPhoneNumber = (countryCode: string | undefined, phone: string | undefined) => {
+    if (!phone) return null;
+    const cleanPhone = phone.trim();
+    if (cleanPhone.startsWith('+')) return cleanPhone;
+    return `${countryCode || '+91'} ${cleanPhone}`;
+  };
+
   return (
     <div className="space-y-6">
+      {/* Toast Notification */}
+      {successToast && (
+        <div className="fixed top-20 right-6 z-50 bg-blue-600 text-white px-4 py-3 rounded-xl shadow-lg flex items-center space-x-2 text-xs font-semibold animate-bounce">
+          <Check className="w-4 h-4" />
+          <span>{successToast}</span>
+        </div>
+      )}
+
       {/* Top Banner / Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-slate-900">Customer Directory</h2>
           <p className="text-xs text-slate-500">
-            Registered commercial clients, order history, and quotations
+            Registered commercial clients, active status management, and commercial records
           </p>
         </div>
         <button
@@ -181,8 +276,8 @@ export const CustomersPage: React.FC = () => {
             className="border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="ALL">All Status</option>
-            <option value="Active">Active</option>
-            <option value="Inactive">Inactive</option>
+            <option value="Active">Active Customers</option>
+            <option value="Inactive">Inactive Customers</option>
           </select>
         </div>
       </div>
@@ -199,7 +294,7 @@ export const CustomersPage: React.FC = () => {
                 <th className="px-5 py-3 text-left">Address</th>
                 <th className="px-5 py-3 text-left">Orders</th>
                 <th className="px-5 py-3 text-left">Total Sales</th>
-                <th className="px-5 py-3 text-left">Status</th>
+                <th className="px-5 py-3 text-left">Account Status</th>
                 <th className="px-5 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -223,9 +318,9 @@ export const CustomersPage: React.FC = () => {
                         </div>
                       )}
                       {c.phone && (
-                        <div className="flex items-center text-slate-500">
+                        <div className="flex items-center text-slate-600 font-medium">
                           <Phone className="w-3 h-3 mr-1 text-slate-400" />
-                          <span>{c.phone}</span>
+                          <span>{formatPhoneNumber(c.countryCode, c.phone)}</span>
                         </div>
                       )}
                     </td>
@@ -233,7 +328,19 @@ export const CustomersPage: React.FC = () => {
                     <td className="px-5 py-3 font-semibold text-slate-800">{c.totalOrders} order(s)</td>
                     <td className="px-5 py-3 font-bold text-slate-900">₹{c.totalSales.toLocaleString('en-IN')}</td>
                     <td className="px-5 py-3">
-                      <StatusBadge status={c.status} />
+                      {/* Interactive In-List Status Control (Requirement 3) */}
+                      <select
+                        value={c.status}
+                        onChange={(e) => handleStatusChange(c.id, e.target.value)}
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded-full border cursor-pointer focus:outline-none transition-all shadow-xs ${
+                          c.status === 'Active'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                            : 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        <option value="Active">● Active</option>
+                        <option value="Inactive">○ Inactive</option>
+                      </select>
                     </td>
                     <td className="px-5 py-3 text-right space-x-2 whitespace-nowrap">
                       <button
@@ -276,14 +383,19 @@ export const CustomersPage: React.FC = () => {
         </div>
       </div>
 
-      {/* CREATE / EDIT MODAL */}
+      {/* CREATE / EDIT CUSTOMER MODAL */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full border border-slate-200">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-900">
-                {modalMode === 'create' ? 'Add New Customer' : `Edit ${selectedCustomer?.customerId}`}
-              </h3>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {modalMode === 'create' ? 'Add New Customer' : `Edit ${selectedCustomer?.customerId}`}
+                </h3>
+                {modalMode === 'create' && (
+                  <p className="text-[11px] text-slate-400">New customer will be created in Active status automatically</p>
+                )}
+              </div>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
@@ -309,27 +421,83 @@ export const CustomersPage: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Email</label>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Email Address</label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="procurement@company.com"
+                  className="w-full border border-slate-300 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* SEARCHABLE COUNTRY CODE + PHONE INPUT (Requirement 4) */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Phone Number</label>
+                <div className="flex rounded-lg shadow-2xs">
+                  {/* Country Code Trigger & Dropdown */}
+                  <div className="relative shrink-0" ref={countryPickerRef}>
+                    <button
+                      type="button"
+                      onClick={() => setCountryPickerOpen(!countryPickerOpen)}
+                      className="h-full px-3 py-2 border border-r-0 border-slate-300 rounded-l-lg bg-slate-50 hover:bg-slate-100 flex items-center space-x-1.5 text-xs text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 z-10"
+                    >
+                      <span className="text-sm">{selectedCountry.flag}</span>
+                      <span>{selectedCountry.code}</span>
+                      <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                    </button>
+
+                    {countryPickerOpen && (
+                      <div className="absolute left-0 top-full mt-1 w-64 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
+                        <div className="p-2 border-b border-slate-100 bg-slate-50">
+                          <input
+                            type="text"
+                            value={countrySearch}
+                            onChange={(e) => setCountrySearch(e.target.value)}
+                            placeholder="Search country or code..."
+                            className="w-full border border-slate-300 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            autoFocus
+                          />
+                        </div>
+                        <div className="max-h-48 overflow-y-auto divide-y divide-slate-50">
+                          {filteredCountries.map((c) => (
+                            <button
+                              key={c.name}
+                              type="button"
+                              onClick={() => {
+                                setFormData({ ...formData, countryCode: c.code });
+                                setCountryPickerOpen(false);
+                                setCountrySearch('');
+                              }}
+                              className={`w-full px-3 py-1.5 flex items-center justify-between text-left text-xs hover:bg-blue-50 transition-colors ${
+                                formData.countryCode === c.code ? 'bg-blue-50 font-bold text-blue-700' : 'text-slate-700'
+                              }`}
+                            >
+                              <div className="flex items-center space-x-2">
+                                <span className="text-base">{c.flag}</span>
+                                <span>{c.name}</span>
+                              </div>
+                              <span className="font-mono text-slate-500 text-[11px]">{c.code}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Phone input */}
                   <input
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="procurement@company.com"
-                    className="w-full border border-slate-300 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Phone</label>
-                  <input
-                    type="text"
+                    type="tel"
                     value={formData.phone}
                     onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    placeholder="+91 ..."
-                    className="w-full border border-slate-300 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="98765 43210"
+                    className="flex-1 min-w-0 border border-slate-300 rounded-r-lg p-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Formatted as: <strong className="font-mono">{formatPhoneNumber(formData.countryCode, formData.phone) || `${formData.countryCode} ...`}</strong>
+                </p>
               </div>
 
               <div>
@@ -357,17 +525,20 @@ export const CustomersPage: React.FC = () => {
                 </div>
               )}
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Status</label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                  className="w-full border border-slate-300 rounded-lg p-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                </select>
-              </div>
+              {/* In Edit mode only: status can be adjusted if needed */}
+              {modalMode === 'edit' && (
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Account Status</label>
+                  <select
+                    value={formData.status}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg p-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                  </select>
+                </div>
+              )}
 
               <div className="pt-3 border-t border-slate-100 flex items-center justify-end space-x-2">
                 <button
@@ -436,7 +607,7 @@ export const CustomersPage: React.FC = () => {
                   </div>
                   <div>
                     <span className="text-[10px] uppercase font-bold text-slate-400 block">Phone</span>
-                    <span>{profileCustomer.phone || 'N/A'}</span>
+                    <span>{formatPhoneNumber(profileCustomer.countryCode, profileCustomer.phone) || 'N/A'}</span>
                   </div>
                   <div className="col-span-2">
                     <span className="text-[10px] uppercase font-bold text-slate-400 block">Address</span>

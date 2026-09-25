@@ -179,27 +179,41 @@ router.get('/stats', authenticateToken, async (req: Request, res: Response): Pro
     );
 
     // 1. Current Period Sales Orders & Quotations
-    const [currentOrders, prevOrders, currentQuotations, prevQuotations] = await Promise.all([
+    const [currentOrders, prevOrders, currentQuotations, prevQuotations, curRejectedOrders, prevRejectedOrders] = await Promise.all([
       prisma.salesOrder.findMany({
         where: {
           orderDate: { gte: ranges.currentStart, lte: ranges.currentEnd },
-          orderStatus: { not: 'Cancelled' },
+          orderStatus: { notIn: ['Cancelled', 'Rejected'] },
         },
       }),
       prisma.salesOrder.findMany({
         where: {
           orderDate: { gte: ranges.previousStart, lte: ranges.previousEnd },
-          orderStatus: { not: 'Cancelled' },
+          orderStatus: { notIn: ['Cancelled', 'Rejected'] },
         },
       }),
       prisma.quotation.findMany({
         where: {
           createdAt: { gte: ranges.currentStart, lte: ranges.currentEnd },
+          isDeleted: false,
         },
       }),
       prisma.quotation.findMany({
         where: {
           createdAt: { gte: ranges.previousStart, lte: ranges.previousEnd },
+          isDeleted: false,
+        },
+      }),
+      prisma.salesOrder.count({
+        where: {
+          orderDate: { gte: ranges.currentStart, lte: ranges.currentEnd },
+          orderStatus: { in: ['Cancelled', 'Rejected'] },
+        },
+      }),
+      prisma.salesOrder.count({
+        where: {
+          orderDate: { gte: ranges.previousStart, lte: ranges.previousEnd },
+          orderStatus: { in: ['Cancelled', 'Rejected'] },
         },
       }),
     ]);
@@ -227,6 +241,9 @@ router.get('/stats', authenticateToken, async (req: Request, res: Response): Pro
     const curRejectedQuotations = currentQuotations.filter((q) => q.status === 'Rejected').length;
     const prevRejectedQuotations = prevQuotations.filter((q) => q.status === 'Rejected').length;
 
+    const curTotalRejected = curRejectedQuotations + curRejectedOrders;
+    const prevTotalRejected = prevRejectedQuotations + prevRejectedOrders;
+
     // Top 6 KPI Cards
     const kpis = {
       totalSales: {
@@ -250,8 +267,8 @@ router.get('/stats', authenticateToken, async (req: Request, res: Response): Pro
         ...calculatePercentChange(curPendingDelivery, prevPendingDelivery),
       },
       rejectedOrders: {
-        value: curRejectedQuotations,
-        ...calculatePercentChange(curRejectedQuotations, prevRejectedQuotations),
+        value: curTotalRejected,
+        ...calculatePercentChange(curTotalRejected, prevTotalRejected),
       },
     };
 
@@ -288,7 +305,7 @@ router.get('/stats', authenticateToken, async (req: Request, res: Response): Pro
     const processingCount = currentOrders.filter((o) => o.orderStatus === 'Processing').length;
     const shipmentSentCount = currentOrders.filter((o) => o.orderStatus === 'Shipment Sent').length;
     const deliveredCount = currentOrders.filter((o) => o.orderStatus === 'Delivered').length;
-    const rejectedCount = curRejectedQuotations; // Rejected quotation count represents rejected sales opportunities
+    const rejectedCount = curTotalRejected;
 
     const orderStatusChart = [
       { name: 'Confirmed', count: confirmedCount, color: '#3b82f6', statusFilter: 'Confirmed' },

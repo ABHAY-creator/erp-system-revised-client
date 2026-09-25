@@ -3,6 +3,7 @@ import prisma from '../db';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { generateNextId } from '../utils/idGenerator';
 import { createAuditLog } from '../middleware/audit';
+import { createNotification } from '../utils/notification';
 
 const router = Router();
 
@@ -81,11 +82,11 @@ router.get('/:id', authenticateToken, async (req: Request, res: Response): Promi
   }
 });
 
-// POST /api/products (Manager & HOD)
+// POST /api/products (Salesperson, Manager & HOD)
 router.post(
   '/',
   authenticateToken,
-  requireRole('SALES_MANAGER', 'HOD'),
+  requireRole('SALESPERSON', 'SALES_MANAGER', 'HOD'),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const {
@@ -135,6 +136,24 @@ router.post(
           module: 'Product',
           recordId: product.productId,
           details: `Created product ${product.productId} - ${product.name}`,
+        });
+
+        await createNotification({
+          targetRole: 'SALES_MANAGER',
+          type: 'PRODUCT',
+          title: `New Product: ${product.productId}`,
+          message: `${req.user.name} (${req.user.role}) added product ${product.productId} - ${product.name} (₹${product.sellingPrice})`,
+          relatedEntityType: 'Product',
+          relatedEntityId: product.productId,
+        });
+
+        await createNotification({
+          targetRole: 'HOD',
+          type: 'PRODUCT',
+          title: `New Product: ${product.productId}`,
+          message: `${req.user.name} added product ${product.productId} - ${product.name}`,
+          relatedEntityType: 'Product',
+          relatedEntityId: product.productId,
         });
       }
 

@@ -36,6 +36,7 @@ async function fetchPeriodData(label: string, start: Date, end: Date): Promise<P
     prisma.quotation.findMany({
       where: {
         createdAt: { gte: start, lte: end },
+        isDeleted: false,
       },
       include: {
         customer: { select: { name: true, customerId: true } },

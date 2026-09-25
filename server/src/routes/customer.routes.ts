@@ -3,6 +3,7 @@ import prisma from '../db';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { generateNextId } from '../utils/idGenerator';
 import { createAuditLog } from '../middleware/audit';
+import { createNotification } from '../utils/notification';
 
 const router = Router();
 
@@ -54,15 +55,16 @@ router.get('/', authenticateToken, async (req: Request, res: Response): Promise<
     const isSalesperson = req.user?.role === 'SALESPERSON';
 
     const formatted = customers.map((c) => {
-      const confirmedOrders = c.salesOrders.filter((o) => o.orderStatus !== 'Cancelled');
+      const confirmedOrders = c.salesOrders.filter((o) => o.orderStatus !== 'Cancelled' && o.orderStatus !== 'Rejected');
       const totalSales = confirmedOrders.reduce((sum, o) => sum + o.totalAmount, 0);
 
       return {
         id: c.id,
         customerId: c.customerId,
         name: c.name,
-        email: isSalesperson ? (c.email ? '***' + c.email.slice(c.email.indexOf('@')) : null) : c.email,
-        phone: isSalesperson ? (c.phone ? '***' + c.phone.slice(-4) : null) : c.phone,
+        email: c.email,
+        countryCode: c.countryCode || '+91',
+        phone: c.phone,
         address: c.address,
         totalOrders: confirmedOrders.length,
         totalSales,
@@ -134,8 +136,9 @@ router.get('/:id', authenticateToken, async (req: Request, res: Response): Promi
 
     const safeCustomer = {
       ...customer,
-      email: isSalesperson ? (customer.email ? '***' + customer.email.slice(customer.email.indexOf('@')) : null) : customer.email,
-      phone: isSalesperson ? (customer.phone ? '***' + customer.phone.slice(-4) : null) : customer.phone,
+      countryCode: customer.countryCode || '+91',
+      email: customer.email,
+      phone: customer.phone,
       notes: isSalesperson ? undefined : customer.notes,
       totalOrders: confirmedOrders.length,
       totalSales,
@@ -150,7 +153,7 @@ router.get('/:id', authenticateToken, async (req: Request, res: Response): Promi
 // POST /api/customers
 router.post('/', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, email, phone, address, notes, status = 'Active' } = req.body;
+    const { name, email, countryCode = '+91', phone, address, notes, status = 'Active' } = req.body;
 
     if (!name || !address) {
       res.status(400).json({ message: 'Customer name and address are required.' });
@@ -164,10 +167,11 @@ router.post('/', authenticateToken, async (req: Request, res: Response): Promise
         customerId: nextId,
         name: name.trim(),
         email: email ? email.trim() : null,
+        countryCode: countryCode ? countryCode.trim() : '+91',
         phone: phone ? phone.trim() : null,
         address: address.trim(),
         notes: notes || null,
-        status,
+        status: status || 'Active',
       },
     });
 
@@ -181,12 +185,86 @@ router.post('/', authenticateToken, async (req: Request, res: Response): Promise
         recordId: customer.customerId,
         details: `Created customer ${customer.customerId} - ${customer.name}`,
       });
+
+      await createNotification({
+        targetRole: 'SALES_MANAGER',
+        type: 'CUSTOMER',
+        title: `New Customer: ${customer.customerId}`,
+        message: `${req.user.name} created customer ${customer.customerId} - ${customer.name}`,
+        relatedEntityType: 'Customer',
+        relatedEntityId: customer.customerId,
+      });
+
+      await createNotification({
+        targetRole: 'HOD',
+        type: 'CUSTOMER',
+        title: `New Customer: ${customer.customerId}`,
+        message: `${req.user.name} created customer ${customer.customerId} - ${customer.name}`,
+        relatedEntityType: 'Customer',
+        relatedEntityId: customer.customerId,
+      });
     }
 
     res.status(201).json({ customer, message: `Customer ${customer.customerId} created successfully.` });
   } catch (error) {
     console.error('Error creating customer:', error);
     res.status(500).json({ message: 'Failed to create customer.' });
+  }
+});
+
+// PATCH /api/customers/:id/status (Toggle / Update Customer Status)
+// Roles: All authenticated users (Salesperson, Manager, HOD)
+router.patch('/:id/status', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { status } = req.body;
+
+    if (!status || !['Active', 'Inactive'].includes(status)) {
+      res.status(400).json({ message: 'Invalid status. Allowed: Active, Inactive' });
+      return;
+    }
+
+    const existing = await prisma.customer.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!existing) {
+      res.status(404).json({ message: 'Customer not found.' });
+      return;
+    }
+
+    const updated = await prisma.customer.update({
+      where: { id: req.params.id },
+      data: { status },
+    });
+
+    if (req.user) {
+      await createAuditLog({
+        userId: req.user.id,
+        userName: req.user.name,
+        userRole: req.user.role,
+        action: 'Updated Customer Status',
+        module: 'Customer',
+        recordId: updated.customerId,
+        details: `Updated status of customer ${updated.customerId} (${updated.name}) to '${status}'`,
+      });
+
+      await createNotification({
+        targetRole: 'SALES_MANAGER',
+        type: 'CUSTOMER',
+        title: `Customer Status Changed: ${updated.customerId}`,
+        message: `${req.user.name} changed status of ${updated.name} to '${status}'.`,
+        relatedEntityType: 'Customer',
+        relatedEntityId: updated.customerId,
+      });
+    }
+
+    res.json({
+      customer: updated,
+      message: `Customer ${updated.customerId} status set to ${status}.`,
+    });
+  } catch (error) {
+    console.error('Error updating customer status:', error);
+    res.status(500).json({ message: 'Failed to update customer status.' });
   }
 });
 
@@ -197,7 +275,7 @@ router.put(
   requireRole('SALES_MANAGER', 'HOD'),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const { name, email, phone, address, notes, status } = req.body;
+      const { name, email, countryCode, phone, address, notes, status } = req.body;
 
       const existing = await prisma.customer.findUnique({
         where: { id: req.params.id },
@@ -213,6 +291,7 @@ router.put(
         data: {
           name: name !== undefined ? name.trim() : existing.name,
           email: email !== undefined ? email : existing.email,
+          countryCode: countryCode !== undefined ? countryCode : existing.countryCode,
           phone: phone !== undefined ? phone : existing.phone,
           address: address !== undefined ? address.trim() : existing.address,
           notes: notes !== undefined ? notes : existing.notes,
@@ -229,6 +308,15 @@ router.put(
           module: 'Customer',
           recordId: updated.customerId,
           details: `Updated customer ${updated.customerId} (${updated.name})`,
+        });
+
+        await createNotification({
+          targetRole: 'SALES_MANAGER',
+          type: 'CUSTOMER',
+          title: `Customer Updated: ${updated.customerId}`,
+          message: `${req.user.name} updated details for customer ${updated.name}.`,
+          relatedEntityType: 'Customer',
+          relatedEntityId: updated.customerId,
         });
       }
 

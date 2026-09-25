@@ -22,7 +22,11 @@ interface AuthContextType {
   isHOD: boolean;
   canConfirmQuotation: boolean;
   canManageProducts: boolean;
+  canAddProduct: boolean;
   canDeleteProduct: boolean;
+  canViewQuotationHistory: boolean;
+  canAccessRecentlyDeleted: boolean;
+  canPermanentDeleteQuotation: boolean;
   canAccessReports: boolean;
   canAccessAI: boolean;
   canManageUsers: boolean;
@@ -81,7 +85,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     isHOD,
     canConfirmQuotation: isManager || isHOD,
     canManageProducts: isManager || isHOD,
+    canAddProduct: true, // Salesperson, Manager, and HOD can add products
     canDeleteProduct: isHOD,
+    canViewQuotationHistory: isManager || isHOD,
+    canAccessRecentlyDeleted: isManager || isHOD,
+    canPermanentDeleteQuotation: isHOD,
     canAccessReports: isManager || isHOD,
     canAccessAI: isHOD,
     canManageUsers: isHOD,

@@ -25,6 +25,7 @@ model User {
   createdQuotations Quotation[]
   createdOrders     SalesOrder[]
   auditLogs         AuditLog[]
+  notifications     Notification[]
 }
 
 // -------------------------------------------------------------
@@ -55,16 +56,17 @@ model Product {
 // CUSTOMER MASTER
 // -------------------------------------------------------------
 model Customer {
-  id         String    @id @default(cuid())
-  customerId String    @unique // CUS-00001
-  name       String
-  email      String?
-  phone      String?
-  address    String
-  notes      String?
-  status     String    @default("Active") // Active, Inactive
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  customerId  String    @unique // CUS-00001
+  name        String
+  email       String?
+  countryCode String?   @default("+91")
+  phone       String?
+  address     String
+  notes       String?
+  status      String    @default("Active") // Active, Inactive
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   quotations Quotation[]
   salesOrders SalesOrder[]
@@ -91,10 +93,17 @@ model Quotation {
   createdById     String
   createdBy       User            @relation(fields: [createdById], references: [id])
   salesOrderId    String?         // Linked SO ID once confirmed
+  sentAt          DateTime?       // When quotation was sent to client
+  sentByName      String?         // Name of user who sent the quotation
+  isDeleted       Boolean         @default(false)
+  deletedAt       DateTime?
+  deletedBy       String?
+  deletedByUserId String?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
   items           QuotationItem[]
+  history         QuotationHistory[]
   salesOrder      SalesOrder?
 }
 
@@ -112,31 +121,53 @@ model QuotationItem {
 }
 
 // -------------------------------------------------------------
+// QUOTATION HISTORY / AUDIT TRAIL
+// -------------------------------------------------------------
+model QuotationHistory {
+  id             String    @id @default(cuid())
+  quotationId    String
+  quotation      Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  action         String    // Created, Modified, Sent, Pending, Confirmed, Rejected, Sales Order Created
+  description    String?   // Reason / commentary / change details
+  userId         String?
+  userName       String
+  userRole       String
+  previousStatus String?
+  newStatus      String?
+  reason         String?
+  createdAt      DateTime  @default(now())
+}
+
+// -------------------------------------------------------------
 // SALES ORDERS (ONLY CONFIRMED QUOTATIONS BECOME ORDERS)
 // -------------------------------------------------------------
 model SalesOrder {
-  id             String           @id @default(cuid())
-  soId           String           @unique // SO-00001
-  quotationId    String           @unique
-  quotation      Quotation        @relation(fields: [quotationId], references: [id])
-  customerId     String
-  customer       Customer         @relation(fields: [customerId], references: [id])
-  orderDate      DateTime         @default(now())
-  orderStatus    String           @default("Confirmed") // Confirmed, Processing, Shipment Sent, Delivered, Cancelled
-  shipmentStatus String           @default("Pending")   // Pending, In Transit, Delivered
-  deliveryStatus String           @default("Pending")   // Pending, Out for Delivery, Delivered
-  shipmentId     String?          // SHP-00001
-  subtotal       Float            @default(0.0)
-  discountAmount Float            @default(0.0)
-  taxAmount      Float            @default(0.0)
-  totalAmount    Float            @default(0.0)
-  notes          String?
-  createdById    String
-  createdBy      User             @relation(fields: [createdById], references: [id])
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  id               String           @id @default(cuid())
+  soId             String           @unique // SO-00001
+  quotationId      String           @unique
+  quotation        Quotation        @relation(fields: [quotationId], references: [id])
+  customerId       String
+  customer         Customer         @relation(fields: [customerId], references: [id])
+  orderDate        DateTime         @default(now())
+  orderStatus      String           @default("Confirmed") // Confirmed, Processing, Shipment Sent, Delivered, Cancelled, Rejected
+  shipmentStatus   String           @default("Pending")   // Pending, In Transit, Delivered, Cancelled
+  deliveryStatus   String           @default("Pending")   // Pending, Out for Delivery, Delivered, Cancelled
+  shipmentId       String?          // SHP-00001
+  subtotal         Float            @default(0.0)
+  discountAmount   Float            @default(0.0)
+  taxAmount        Float            @default(0.0)
+  totalAmount      Float            @default(0.0)
+  rejectionReason  String?
+  rejectedByUserId String?
+  rejectedByName   String?
+  rejectedAt       DateTime?
+  notes            String?
+  createdById      String
+  createdBy        User             @relation(fields: [createdById], references: [id])
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
-  items          SalesOrderItem[]
+  items            SalesOrderItem[]
 }
 
 model SalesOrderItem {
@@ -150,6 +181,23 @@ model SalesOrderItem {
   quantity     Float
   unitPrice    Float
   totalPrice   Float
+}
+
+// -------------------------------------------------------------
+// NOTIFICATIONS
+// -------------------------------------------------------------
+model Notification {
+  id                String   @id @default(cuid())
+  userId            String?  // Target recipient user
+  user              User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetRole        String?  // SALESPERSON, SALES_MANAGER, HOD, ALL
+  type              String   // QUOTATION, SALES, CUSTOMER, PRODUCT, SYSTEM
+  title             String
+  message           String
+  relatedEntityType String?  // Quotation, SalesOrder, Customer, Product
+  relatedEntityId   String?  // Entity ID or display ID
+  isRead            Boolean  @default(false)
+  createdAt         DateTime @default(now())
 }
 
 // -------------------------------------------------------------

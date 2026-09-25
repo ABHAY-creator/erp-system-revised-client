@@ -3,6 +3,7 @@ import prisma from '../db';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { generateNextId } from '../utils/idGenerator';
 import { createAuditLog } from '../middleware/audit';
+import { createNotification } from '../utils/notification';
 
 const router = Router();
 
@@ -87,6 +88,9 @@ router.get('/', authenticateToken, async (req: Request, res: Response): Promise<
       shipmentStatus: o.shipmentStatus,
       deliveryStatus: o.deliveryStatus,
       shipmentId: o.shipmentId,
+      rejectionReason: o.rejectionReason,
+      rejectedByName: o.rejectedByName,
+      rejectedAt: o.rejectedAt,
       itemsCount: o._count.items,
       createdAt: o.createdAt,
     }));
@@ -146,26 +150,32 @@ router.get('/:id', authenticateToken, async (req: Request, res: Response): Promi
 });
 
 // PATCH /api/sales/:id/status (Update Order / Shipment / Delivery Status)
-// Roles: SALES_MANAGER, HOD
+// Roles: SALESPERSON, SALES_MANAGER, HOD
 router.patch(
   '/:id/status',
   authenticateToken,
-  requireRole('SALES_MANAGER', 'HOD'),
+  requireRole('SALESPERSON', 'SALES_MANAGER', 'HOD'),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const { orderStatus, notes } = req.body;
+      const { orderStatus, notes, rejectionReason } = req.body;
+      const user = req.user!;
 
-      const validStatuses = ['Confirmed', 'Processing', 'Shipment Sent', 'Delivered', 'Cancelled'];
-      if (!orderStatus || !validStatuses.includes(orderStatus)) {
+      // Salesperson can update to Confirmed or Rejected / Cancelled
+      const salespersonAllowed = ['Confirmed', 'Rejected', 'Cancelled'];
+      const managementAllowed = ['Confirmed', 'Processing', 'Shipment Sent', 'Delivered', 'Cancelled', 'Rejected'];
+
+      const allowedStatuses = user.role === 'SALESPERSON' ? salespersonAllowed : managementAllowed;
+
+      if (!orderStatus || !allowedStatuses.includes(orderStatus)) {
         res.status(400).json({
-          message: `Invalid order status. Allowed: ${validStatuses.join(', ')}`,
+          message: `Invalid order status. Allowed for ${user.role}: ${allowedStatuses.join(', ')}`,
         });
         return;
       }
 
       const existing = await prisma.salesOrder.findUnique({
         where: { id: req.params.id },
-        include: { customer: true },
+        include: { customer: true, quotation: true },
       });
 
       if (!existing) {
@@ -176,6 +186,12 @@ router.patch(
       let shipmentStatus = existing.shipmentStatus;
       let deliveryStatus = existing.deliveryStatus;
       let shipmentId = existing.shipmentId;
+      let updateRejectionReason = existing.rejectionReason;
+      let updateRejectedByUserId = existing.rejectedByUserId;
+      let updateRejectedByName = existing.rejectedByName;
+      let updateRejectedAt = existing.rejectedAt;
+
+      const isRejection = orderStatus === 'Rejected' || orderStatus === 'Cancelled';
 
       if (orderStatus === 'Processing') {
         shipmentStatus = 'Pending';
@@ -192,9 +208,13 @@ router.patch(
         if (!shipmentId) {
           shipmentId = await generateNextId('SHP');
         }
-      } else if (orderStatus === 'Cancelled') {
+      } else if (isRejection) {
         shipmentStatus = 'Cancelled';
         deliveryStatus = 'Cancelled';
+        updateRejectionReason = rejectionReason || notes || 'Order rejected by salesperson';
+        updateRejectedByUserId = user.id;
+        updateRejectedByName = user.name;
+        updateRejectedAt = new Date();
       }
 
       const updated = await prisma.salesOrder.update({
@@ -204,20 +224,105 @@ router.patch(
           shipmentStatus,
           deliveryStatus,
           shipmentId,
+          rejectionReason: updateRejectionReason,
+          rejectedByUserId: updateRejectedByUserId,
+          rejectedByName: updateRejectedByName,
+          rejectedAt: updateRejectedAt,
           notes: notes !== undefined ? notes : existing.notes,
         },
         include: { customer: true, items: true },
       });
 
+      // Update Quotation History if linked
+      if (existing.quotationId) {
+        await prisma.quotationHistory.create({
+          data: {
+            quotationId: existing.quotationId,
+            action: isRejection ? 'Rejected' : orderStatus,
+            description: isRejection
+              ? `Order ${updated.soId} was rejected by ${user.name} (${user.role}). Reason: ${updateRejectionReason}`
+              : `Sales order ${updated.soId} status updated to '${orderStatus}'`,
+            userId: user.id,
+            userName: user.name,
+            userRole: user.role,
+            previousStatus: existing.orderStatus,
+            newStatus: orderStatus,
+            reason: isRejection ? updateRejectionReason : null,
+          },
+        });
+      }
+
+      // Create Audit Log
       await createAuditLog({
-        userId: req.user!.id,
-        userName: req.user!.name,
-        userRole: req.user!.role,
-        action: 'Updated Order Status',
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        action: isRejection ? 'Rejected Order' : 'Updated Order Status',
         module: 'Sales',
         recordId: updated.soId,
-        details: `Updated sales order ${updated.soId} status to '${orderStatus}'${shipmentId ? ` (Shipment ID: ${shipmentId})` : ''}`,
+        details: isRejection
+          ? `Rejected order ${updated.soId}. Reason: ${updateRejectionReason}`
+          : `Updated sales order ${updated.soId} status to '${orderStatus}'${shipmentId ? ` (Shipment ID: ${shipmentId})` : ''}`,
       });
+
+      // Generate Role-Based Notifications
+      if (isRejection) {
+        await createNotification({
+          targetRole: 'SALES_MANAGER',
+          type: 'SALES',
+          title: `Order ${updated.soId} Rejected`,
+          message: `Sales Order ${updated.soId} for ${existing.customer.name} was rejected by ${user.name}.${updateRejectionReason ? ` Reason: ${updateRejectionReason}` : ''}`,
+          relatedEntityType: 'SalesOrder',
+          relatedEntityId: updated.soId,
+        });
+        await createNotification({
+          targetRole: 'HOD',
+          type: 'SALES',
+          title: `Order ${updated.soId} Rejected`,
+          message: `Sales Order ${updated.soId} for ${existing.customer.name} was rejected by ${user.name}.${updateRejectionReason ? ` Reason: ${updateRejectionReason}` : ''}`,
+          relatedEntityType: 'SalesOrder',
+          relatedEntityId: updated.soId,
+        });
+        if (existing.createdById !== user.id) {
+          await createNotification({
+            userId: existing.createdById,
+            type: 'SALES',
+            title: `Order ${updated.soId} Rejected`,
+            message: `Your Sales Order ${updated.soId} was rejected by ${user.name}.${updateRejectionReason ? ` Reason: ${updateRejectionReason}` : ''}`,
+            relatedEntityType: 'SalesOrder',
+            relatedEntityId: updated.soId,
+          });
+        }
+      } else if (orderStatus === 'Shipment Sent') {
+        await createNotification({
+          userId: existing.createdById,
+          targetRole: 'SALES_MANAGER',
+          type: 'SALES',
+          title: `Shipment Sent: ${updated.soId}`,
+          message: `Shipment ${shipmentId} dispatched for Order ${updated.soId} (${existing.customer.name}).`,
+          relatedEntityType: 'SalesOrder',
+          relatedEntityId: updated.soId,
+        });
+      } else if (orderStatus === 'Delivered') {
+        await createNotification({
+          userId: existing.createdById,
+          targetRole: 'HOD',
+          type: 'SALES',
+          title: `Order Delivered: ${updated.soId}`,
+          message: `Order ${updated.soId} has been successfully delivered to ${existing.customer.name}.`,
+          relatedEntityType: 'SalesOrder',
+          relatedEntityId: updated.soId,
+        });
+      } else if (orderStatus === 'Confirmed') {
+        await createNotification({
+          targetRole: 'SALES_MANAGER',
+          type: 'SALES',
+          title: `Order Confirmed: ${updated.soId}`,
+          message: `Order ${updated.soId} confirmed for ${existing.customer.name} (₹${updated.totalAmount.toLocaleString('en-IN')}).`,
+          relatedEntityType: 'SalesOrder',
+          relatedEntityId: updated.soId,
+        });
+      }
 
       res.json({
         order: updated,

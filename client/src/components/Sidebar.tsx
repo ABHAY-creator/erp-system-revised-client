@@ -48,7 +48,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
     navItems.push({ to: '/audit-logs', label: 'Audit Logs', icon: History });
   }
 
-  navItems.push({ to: '/settings', label: 'Settings', icon: Settings });
+  if (user?.role !== 'SALESPERSON') {
+    navItems.push({ to: '/settings', label: 'Settings', icon: Settings });
+  }
 
   return (
     <>
